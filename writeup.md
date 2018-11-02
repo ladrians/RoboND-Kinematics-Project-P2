@@ -13,7 +13,7 @@ My solution for the Robotics NanoDegree [Project #2](https://github.com/ladrians
 [image7]: ./misc_images/13_10_04.png
 [image8]: ./misc_images/13_10_05.png
 [image9]: ./misc_images/17_eq.png
-
+[image10]: ./misc_images/sample_result01.png
 
 ---
 ### Description
@@ -39,7 +39,7 @@ Common normals and reference frame origins:
 
 ![alt text][image8]
 
-Finally the two-finger gripper needs an extra frame. It represents the point on the end effector that we actually care about. It differs from frame 6 only by a translation in the Z6 direction.
+Finally the two-finger gripper needs an extra frame. It represents the point on the end effector that we actually care about. It differs from frame 6 only by a translation in the Z direction.
 
 The data for the associated joints can be found in the [kr210.urdf.xacro](kuka_arm/urdf/kr210.urdf.xacro) file, the important parts are highlighted as follows:
 
@@ -104,7 +104,7 @@ The data for the associated joints can be found in the [kr210.urdf.xacro](kuka_a
 The values from the URDF representation can be resumed in the following table:
 
 Joint | x(m) | y(m) | z(m)
---- | --- | ---
+--- | --- | --- | ---
 1 | 0 | 0 | 0.33
 2 | 0.35 | 0 | 0.42
 3 | 0 | 0 | 1.25
@@ -130,16 +130,14 @@ self.s = {
  ```
 where:
 
- * 'alpha*' represents the twist angles.
- * 'a*' represents the link lengths.
- * 'd*' represents the link offsets.
- * 'q*' represents the joint variables.
-
+ * `alpha*` represents the twist angles.
+ * `a*` represents the link lengths.
+ * `d*` represents the link offsets.
+ * `q*` represents the joint variables.
 
 #### 2. Using the DH parameter table you derived earlier, create individual transformation matrices about each joint. In addition, also generate a generalized homogeneous transform between base_link and gripper_link using only end-effector(gripper) pose.
 
 The DH parameter table using the previous information for the DH representation is detailed as follows:
-
 
 Links | alpha(i-1) | a(i-1) | d(i-1) | theta(i)
 --- | --- | --- | --- | ---
@@ -167,13 +165,9 @@ The homogeneous transforms between individual neighbouring links starting at 0 a
 
 ![alt text][image9]
 
+We need to compensate for a rotation discrepancy between DH parameters and the URDF definition. The matrix is encapsulated in the `get_rot_end_effector` method from the [DHmodel](kuka_arm/scripts/DHmodel.py) class.
 
-We need to compensate for a rotation discrepancy between DH parameters and the definition in URDF. The matrix is encapsulated in the `get_rot_end_effector` method from the [DHmodel](kuka_arm/scripts/DHmodel.py) class.
-
-We solve it applying a body fix rotation about the Z axis and then about the Y axis:
-
-
-The implementation is as follows:
+We solve it applying a body fix rotation about the Z axis and then about the Y axis, the implementation is as follows:
 
 ```python
 def get_rot_error(self, y_angle, p_angle):
@@ -188,6 +182,19 @@ We get the forward kinematics of the Kuka arm.
 
 ```python
 ROT_EE = ROT_EE * Rot_Error
+```
+
+#### 3. Decouple Inverse Kinematics problem into Inverse Position Kinematics and inverse Orientation Kinematics; doing so derive the equations to calculate all individual joint angles.
+
+The last three joints for the Kuka arm are revolute and their joint axes intersect at a single point, we have a case of spherical wrist with joint_5 being the common intersection point and hence the wrist center. Kinematically we can decouple the problem into Inverse Position and Inverse Orientation.
+
+##### 3.1 Inverse Position
+
+The arm is a spherical wrist on the joints 4,5,6 where the position of this center is governed by the first three joints. We can obtain the wrist center position by using the complete transformation matrix (last section) based on the end-effector pose.
+
+One such convention is the x-y-z extrinsic rotations. The resulting rotational matrix using this convention to transform from one fixed frame to another, would be:
+
+```python
 ROT_EE = ROT_EE.subs({'r':roll, 'p':pitch, 'y':yaw})
 
 EE = Matrix([
@@ -199,19 +206,79 @@ EE = Matrix([
 WC = EE - (0.303) * ROT_EE[:,2]
 ```
 
+Once the wrist center (WC) position is calculated, calculating theta 1 can be calculated as:
 
-#### 3. Decouple Inverse Kinematics problem into Inverse Position Kinematics and inverse Orientation Kinematics; doing so derive the equations to calculate all individual joint angles.
+```python
+theta1 = atan2(WC[1], WC[0])
+```
 
-And here's where you can draw out and show your math for the derivation of your theta angles. 
+Theta 2 and 3 are trickier to visualize but can be calculated using trigonometry and the Cosine Laws:
 
+![alt text][image3]
+
+The labels 2, 3 and WC are Joint 2, Joint 3, and the Wrist Center, respectively.
+
+```python
+# SSS triangle for theta 2 and theta3
+side_a = 1.501
+side_b = sqrt(pow((sqrt(WC[0]*WC[0]+WC[1]*WC[1])-0.35),2) + pow((WC[2]-0.75),2))
+side_c = 1.25
+
+angle_a = acos((side_b*side_b+side_c*side_c-side_a*side_a)/(2*side_b*side_c))
+angle_b = acos((side_a*side_a+side_c*side_c-side_b*side_b)/(2*side_a*side_c))
+angle_c = acos((side_a*side_a+side_b*side_b-side_c*side_c)/(2*side_a*side_b))
+
+theta2 = pi / 2 - angle_a - atan2(WC[2]-0.75, sqrt(WC[0]*WC[0]+WC[1]*WC[1])-0.35)
+theta3 = pi / 2 - (angle_b + 0.036) # 0.036 accounts for sag in link4 of -0.054m
+```
+
+##### 3.2 Inverse Orientation
+
+We need to find values of the final three joint variables. Using the individual DH transforms we can obtain the resultant transform and hence resultant rotation.
+
+```python
+R0_3 = dh_model.T0_1[0:3,0:3] * dh_model.T1_2[0:3,0:3] * dh_model.T2_3[0:3,0:3]
+R0_3 = R0_3.evalf(subs={dh_model.q1:theta1, dh_model.q2:theta2, dh_model.q3:theta3})
+
+R3_6 = R0_3.transpose() * ROT_EE
+
+# Euler angles from rotation matrix
+
+theta4 = atan2(R3_6[2,2], -R3_6[0,2])
+a = sqrt(R3_6[0,2]*R3_6[0,2] + R3_6[2,2]*R3_6[2,2])
+theta5 = atan2(a, R3_6[1,2])
+theta6 = atan2(-R3_6[1,1], R3_6[1,0])
+```
 
 ### Project Implementation
 
 #### 1. Fill in the `IK_server.py` file with properly commented python code for calculating Inverse Kinematics based on previously performed Kinematic Analysis. Your code must guide the robot to successfully complete 8/10 pick and place cycles. Briefly discuss the code you implemented and your results. 
 
+The code was arranged initially taken all possible tips from the [walkthrough project](https://www.youtube.com/watch?v=Gt8DRm-REt4).
 
-Here I'll talk about the code, what techniques I used, what worked and why, where the implementation might fail and how I might improve it if I were going to pursue this project further.  
+Once the basics were working using the [IK_debug](kuka_arm/scripts/IK_debug.py) most of the code were refactored to be better reused, the [DHmodel](kuka_arm/scripts/DHmodel.py) class was created.
 
+During the `IK_server` node initialization, the [DHmodel](kuka_arm/scripts/DHmodel.py) class is initialized.
+
+The `handle_calculate_IK` callback function receives the end-effector positions and when valid the following is executed to create all the parameters non-dependant on the Trajectory Points, meaning the individual transformation matrices from the DH Parameters table.
+
+```python
+# Create symbols
+dh_model.init_variables()
+
+# Create Modified DH parameters
+dh_model.init_dh_parameters()
+
+# Define Modified DH Transformation matrix
+# Create individual transformation matrices
+dh_model.init_transform_matrices()
+```
+
+Then, all calculus is executed for the list of received points (theta1 to theta6 for all points) and the response is populated as a response to the simulator.
+
+The following image details the final part of a Pick and Place sample where the blue can is dropped.
+
+![alt text][image5]
 
 ### Resources
 
@@ -219,11 +286,3 @@ Here I'll talk about the code, what techniques I used, what worked and why, wher
 * [Project Baseline](https://github.com/ladrians/RoboND-Rover-Project-P1)
 * [Original Repository](https://github.com/udacity/RoboND-Kinematics-Project)
 * [Rubric](https://review.udacity.com/#!/rubrics/972/view)
-
-### TODO
-
-Check these images
-
-![alt text][image1]
-![alt text][image2]
-![alt text][image3]
