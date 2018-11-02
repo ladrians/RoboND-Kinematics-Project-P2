@@ -214,7 +214,7 @@ theta1 = atan2(WC[1], WC[0])
 
 Theta 2 and 3 are trickier to visualize but can be calculated using trigonometry and the Cosine Laws:
 
-![alt text][image3]
+![alt text][image2]
 
 The labels 2, 3 and WC are Joint 2, Joint 3, and the Wrist Center, respectively.
 
@@ -278,7 +278,7 @@ Then, all calculus is executed for the list of received points (theta1 to theta6
 
 The following image details the final part of a Pick and Place sample where the blue can is dropped.
 
-![alt text][image5]
+![alt text][image10]
 
 ### Resources
 
