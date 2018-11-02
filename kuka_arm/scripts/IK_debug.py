@@ -2,6 +2,7 @@ from sympy import *
 from time import time
 from mpmath import radians
 import tf
+from DHmodel import *
 
 '''
 Format of test case is [ [[EE position],[EE orientation as quaternions]],[WC location],[joint angles]]
@@ -64,87 +65,30 @@ def test_code(test_case):
 
     ## Insert IK code here!
 
-    q1, q2, q3, q4, q5, q6, q7 = symbols('q1:8')
-    d1, d2, d3, d4, d5, d6, d7 = symbols('d1:8') # link offset
-    a0, a1, a2, a3, a4, a5, a6 = symbols('a0:7') # link length
-    alpha0, alpha1, alpha2, alpha3, alpha4, alpha5, alpha6 = symbols('alpha0:7') # twist angle        
-    
-    # DH Parameters
-    s = {
-        alpha0:      0,  a0:      0, d1:  0.75, q1:          q1, 
-        alpha1: -pi/2.,  a1:   0.35, d2:     0, q2: -pi/2. + q2,
-        alpha2:      0,  a2:   1.25, d3:     0, q3:          q3,
-        alpha3: -pi/2.,  a3: -0.054, d4:   1.5, q4:          q4,
-        alpha4:  pi/2.,  a4:      0, d5:     0, q5:          q5,
-        alpha5: -pi/2.,  a5:      0, d6:     0, q6:          q6,
-        alpha6:      0,  a6:      0, d7: 0.303, q7:          0
-    }
+    global dh_model
+    dh_model.init_variables()
 
-    # Use a function to generate the DH Transformation matrix
-    def TF_Matrix(alpha, a, d, q):
-        TF = Matrix([
-            [cos(q), -sin(q), 0, a],
-            [sin(q)*cos(alpha), cos(q)*cos(alpha), -sin(alpha), -sin(alpha)*d],
-            [sin(q)*sin(alpha), cos(q)*sin(alpha),  cos(alpha),  cos(alpha)*d],
-            [0,0,0,1]
-            ])
-        return TF
+    # DH Parameters
+
+    dh_model.init_dh_parameters()
 
     # Create invididual transformation matrices
 
-    T0_1  = TF_Matrix(alpha0, a0, d1, q1).subs(s)
-    T1_2  = TF_Matrix(alpha1, a1, d2, q2).subs(s)
-    T2_3  = TF_Matrix(alpha2, a2, d3, q3).subs(s)
-    T3_4  = TF_Matrix(alpha3, a3, d4, q4).subs(s)
-    T4_5  = TF_Matrix(alpha4, a4, d5, q5).subs(s)
-    T5_6  = TF_Matrix(alpha5, a5, d6, q6).subs(s)
-    T6_EE = TF_Matrix(alpha6, a6, d7, q7).subs(s)
-
-    T0_EE = T0_1 * T1_2 * T2_3 * T3_4 * T4_5 * T5_6 * T6_EE
+    dh_model.init_transform_matrices()
 
     # Exctract end-effector position and orientation from request
     
     # px, py, pz = end-effector position
     # roll, pitch, yaw = end-effector orientation
-    px = req.poses[x].position.x
-    py = req.poses[x].position.y
-    pz = req.poses[x].position.z
+    px, py, pz = get_position(req.poses[x])
 
-    (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(
-        [req.poses[x].orientation.x, 
-         req.poses[x].orientation.y, 
-         req.poses[x].orientation.z, 
-         req.poses[x].orientation.w
-        ])
+    (roll, pitch, yaw) = get_euler(req.poses[x])
 
-    # Find EE rotation matrix
-    # Define RPY rotation matrices
-    # http://planning.cs.uiuc.edu/node102.html
 
-    r, p, y = symbols('r p y')
-
-    ROT_x = Matrix([
-        [1, 0, 0],
-        [0, cos(r), -sin(r)],
-        [0, sin(r), cos(r)]
-        ]) # Roll
-
-    ROT_y = Matrix([
-        [cos(p), 0, sin(p)],
-        [0, 1, 0],
-        [-sin(p), 0, cos(p)]
-        ]) # Pitch
-
-    ROT_z = Matrix([
-        [cos(y), -sin(y), 0],
-        [sin(r), cos(y), 0],
-        [0, 0, 1]
-        ]) # Yaw
-
-    ROT_EE = ROT_z * ROT_y * ROT_x
-
+    ROT_EE = dh_model.get_rot_end_effector()
     # More information can be found in KR210 Forward Kinematics section
-    Rot_Error = ROT_z.subs(y, radians(180)) * ROT_y.subs(p, radians(-90))
+
+    Rot_Error = dh_model.get_rot_error(radians(180), radians(-90))
 
     ROT_EE = ROT_EE * Rot_Error
     ROT_EE = ROT_EE.subs({'r':roll, 'p':pitch, 'y':yaw})
@@ -173,10 +117,10 @@ def test_code(test_case):
     theta2 = pi / 2 - angle_a - atan2(WC[2]-0.75, sqrt(WC[0]*WC[0]+WC[1]*WC[1])-0.35)
     theta3 = pi / 2 - (angle_b + 0.036) # 0.036 accounts for sag in link4 of -0.054m
 
-    R0_3 = T0_1[0:3,0:3] * T1_2[0:3,0:3] * T2_3[0:3,0:3]
-    R0_3 = R0_3.evalf(subs={q1:theta1, q2:theta2, q3:theta3})
+    R0_3 = dh_model.T0_1[0:3,0:3] * dh_model.T1_2[0:3,0:3] * dh_model.T2_3[0:3,0:3]
+    R0_3 = R0_3.evalf(subs={dh_model.q1:theta1, dh_model.q2:theta2, dh_model.q3:theta3})
 
-    R3_6 = R0_3.transpose() * ROT_EE # inv("LU")
+    R3_6 = R0_3.transpose() * ROT_EE
 
     # Euler angles from rotation matrix
     # More information can be found in the Euler Angles from a Rotation Matrix section
@@ -196,7 +140,7 @@ def test_code(test_case):
     ## as the input and output the position of your end effector as your_ee = [x,y,z]
 
     ## (OPTIONAL) YOUR CODE HERE!
-    FK = T0_EE.evalf(subs={q1:theta1, q2:theta2, q3:theta3, q4:theta4, q5:theta5, q6:theta6})
+    FK = dh_model.T0_EE.evalf(subs={dh_model.q1:theta1, dh_model.q2:theta2, dh_model.q3:theta3, dh_model.q4:theta4, dh_model.q5:theta5, dh_model.q6:theta6})
 
     ## End your code input for forward kinematics here!
     ########################################################################################
@@ -255,10 +199,17 @@ def test_code(test_case):
 if __name__ == "__main__":
 
     ## Change test case number for different scenarios
+
+    global dh_model
+
+    dh_model = DHmodel()
+
     #test_case_number = 1
     #test_code(test_cases[test_case_number])
 
     # Try all test cases
+    '''
+    '''
     for i in range(1, 4):
         print("CASE", i)
         test_code(test_cases[i])
